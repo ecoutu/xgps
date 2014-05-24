@@ -1,0 +1,25 @@
+H  SOFTWARE NAME & VERSION
+I  GPSU 4.20 01 FREEWARE VERSION
+S DateFormat=dd/mm/yy
+S Timezone=+01:00
+S Units=K,M
+S SymbolSet=1
+
+H R DATUM
+M E               WGS 84 100  0.0000000E+00  0.0000000E+00 0 0 0
+
+H  COORDINATE SYSTEM
+U  LAT LON DEG
+
+F ID---- Latitude   Longitude   Symbol---- T Comment
+W BRWDWN N14.000000        E1.111111          Waypoint   C BROWNDOWN
+W CALPR  S24.000000        W6.666666          House      C CALSHOT PIER
+W CALSHT N12.222222        E2.222222          Waypoint   I CALSHOT
+
+F Latitude   Longitude   Date     Time     S Duration       km   km/h
+T S26        W7.777777          08/10/94 14:16:23 1
+T N77        E3.333333          08/10/94 14:16:32 0  0:00:09    0.024    9.5
+T S88        W8.777777          08/10/94 14:16:23 1
+T N13        E3.333333          08/10/94 14:16:32 0  0:00:09    0.024    9.5
+T S26        W9.777777          08/10/94 14:16:23 1
+T N13        E10.333333          08/10/94 14:16:32 0  0:00:09    0.024    9.5

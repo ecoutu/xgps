@@ -1,0 +1,63 @@
+H  SOFTWARE NAME & VERSION
+I  GPSU 4.20 01 FREEWARE VERSION
+S DateFormat=dd/mm/yy
+S Timezone=+01:00
+S Units=K,M
+S SymbolSet=1
+
+H R DATUM
+M E               WGS 84 100  0.0000000E+00  0.0000000E+00 0 0 0
+
+H  COORDINATE SYSTEM
+U  LAT LON DEG
+
+F ID---- Latitude   Longitude   Symbol---- T Comment
+W BRWDWN N50.776181 W001.182629 Waypoint   C BROWNDOWN                             
+W CALPR  N50.820507 W001.308285 House      C CALSHOT PIER                          
+W CALSHT N50.807175 W001.283957 Waypoint   I CALSHOT                               
+W CORONT N50.825838 W001.293625 Waypoint   C CORONATION                            
+W COWES4 N50.767843 W001.297786 Waypoint   C COWES NO 4                            
+W COWESB N50.764512 W001.291957 Skull      I COWES BREAKWATER                      
+W COWS10 N50.743464 W001.288716 Waypoint   I COWES 10                              
+W EBRAMB N50.787177 W001.227293 Waypoint   I EAST BRAMBLE                          
+W ECOWES N50.750683 W001.291864 Boat       I EAST COWES MRNA                       
+W ELEPE  N50.768676 W001.348281 Waypoint   I EAST LEPE                             
+W FOLLY  N50.733184 W001.282455 House      I FOLLY INN                             
+W GRNLND N50.851835 W001.340283 Waypoint   I GREENLAND                             
+W GURNRD N50.770178 W001.314116 Waypoint   I GURNARD                               
+W HAMBPT N50.835838 W001.311124 Waypoint   I HAMBLE POINT                          
+W HAMSLG N50.731012 W001.436440 Waypoint   I HAMSTEAD LEDGE                        
+W HOOK   N50.825173 W001.305121 Waypoint   I HOOK                                  
+W HOUND  N50.861335 W001.358613 Waypoint   I HOUND                                 
+W HURSTH N50.707848 W001.550429 Flag       I HURST HIGH LGT                        
+W HYTHE  N50.875502 W001.393112 Boat       I HYTHE MARINA                          
+W HYTHEK N50.880501 W001.396949 Waypoint   I HYTHE KNOCK                           
+W ISLHRB N50.725851 W001.281785 Boat       I ISLAND HARBOUR                        
+W JACKIB N50.738012 W001.509600 Waypoint   I JACK IN BASKET                        
+W LUCAS  N50.771180 W001.145969 Waypoint   I LUCAS                                 
+W LYMMAR N50.756675 W001.530099 Boat       C LYMINGTON MARINA                        
+W MIDSHG N50.686851 W001.577756 Waypoint   I MID SHINGLES                          
+W MOTHER N50.758016 W001.186963 Waypoint   I MOTHER BANK                           
+W NEEDLE N50.662020 W001.591924 Flag       I NEEDLES LGHTHSE                       
+W NEWPEN N50.708686 W001.289783 Waypoint   I NEWPORT ENTRANCE                      
+W NEWPRT N50.703685 W001.290288 Boat       C NEWPORT HARBOUR                       
+W NEWTGR N50.726349 W001.412607 Waypoint   I NEWTOWN GREEN                         
+W NORRIS N50.765847 W001.258123 Waypoint   I NORRIS                                
+W NR01   N50.728672 W001.416217 Waypoint   - NEWTOWN RIVER                         
+W NR09   N50.712054 W001.413470 House      I SHALFLEET                             
+W NTHORN N50.798507 W001.297289 Waypoint   I NORTH THORN                           
+W NWNETY N50.871834 W001.378950 Waypoint   C NORTH WEST NETLEY                       
+W PEELWK N50.748516 W001.223791 Waypoint   I PEEL WRECK                            
+W PRINCO N50.773515 W001.292622 Waypoint   I PRINCE CONSORT                        
+W REACH  N50.817507 W001.294290 Waypoint   I REACH                                 
+W RMB02  N50.714602 W001.287664 Waypoint   - RIVER MEDINA                          
+W RMB03  N50.718946 W001.285464 Waypoint   - RIVER MEDINA                          
+W RYDEPH N50.739681 W001.159965 House      I RYDE PIER HEAD                        
+W SALTMD N50.741848 W001.383946 Waypoint   I SALTMEAD                              
+W SCONCE N50.708846 W001.523930 Waypoint   I SCONCE                                
+W WARDEN N50.691514 W001.559259 Waypoint   I WARDEN                                
+W WBRAMB N50.786678 W001.310950 Waypoint   I WEST BRAMBLE                          
+W WLEPE  N50.753843 W001.401444 Waypoint   I WEST LEPE                             
+W WOOTON N50.735016 W001.213625 Waypoint   I WOOTON ENTRANCE                       
+W YARMPH N50.708846 W001.499769 House      I YARMOUTH PR HD                        
+

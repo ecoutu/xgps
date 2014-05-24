@@ -1,0 +1,26 @@
+H  SOFTWARE NAME & VERSION
+I  GPSU 4.20 01 FREEWARE VERSION
+S DateFormat=dd/mm/yy
+S Timezone=+01:00
+S Units=K,M
+S SymbolSet=1
+
+H R DATUM
+M E               WGS 84 100  0.0000000E+00  0.0000000E+00 0 0 0
+
+H  COORDINATE SYSTEM
+U  LAT LON DEG
+
+F ID---- Latitude   Longitude   Symbol--- T Comment
+W FILE_B N50.776181 W001.182629 Waypoint  C BROWNDOWN       
+
+F ID---- Latitude   Longitude   Symbol-------- T Comment
+W WAYP_A N50.880501 W001.396949 Waypoint       I HYTHE KNOCK                           
+W WAYP_B N50.725851 W001.281785 Boat           I ISLAND HARBOUR                        
+W WAYP_C N50.738012 W001.509600 Waypoint       I JACK IN BASKET
+
+R 08 CALSHT - NEWPRT     
+F ID----
+W WAYP_A
+W WAYP_B
+W WAYP_C

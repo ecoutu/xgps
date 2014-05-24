@@ -1,0 +1,1181 @@
+#!/usr/bin/python2.5
+# xgps -- Graphical User Interface for gpstool
+# Eric Coutu
+# ID #0523365
+
+from __future__ import with_statement
+import MySQLdb
+import os
+import tempfile
+import errno
+import socket
+import warnings
+import math
+import random
+import urllib2
+import Gps
+from xml.etree.ElementTree import *
+from GMapData import *
+import Tix
+from Tkinter import *
+from tkMessageBox import *
+from tkFileDialog import *
+from tkColorChooser import askcolor
+from ScrolledText import *
+import tkSimpleDialog
+
+
+class Waypoint:
+    def __init__(self, waypt):
+        # waypt = (id, lat, lon, symbol, textChoice, textPlace, comment)
+        self.ID = waypt[0].strip()
+        self.lat = waypt[1]
+        self.lon = waypt[2]
+        self.symbol = waypt[3].strip()
+        self.textChoice = waypt[4]
+        self.textPlace = waypt[5]
+        self.comment = waypt[6].strip()
+
+    def __str__(self):
+        return str((self.ID, str(self.lat), str(self.lon), self.symbol, self.textChoice, self.textPlace, self.comment))
+
+    def getText(self):
+        if self.textChoice == '-': # none
+            return ''
+        elif self.textChoice in ['I', '+']: # id or id + altitude
+            return self.ID
+        elif self.textChoice in ['C', '^']: # comment or comment + altitude
+            return self.comment
+        elif self.textChoice == '&': # id, comment
+            return self.ID + ' - ' + self.comment
+
+    def getCoord(self):
+        return (self.lat, self.lon)
+
+    def greatCircleDistance(self, pt):
+        slat, slon = math.radians(self.lat), math.radians(self.lon)
+        flat, flon = math.radians(pt[0]), math.radians(pt[1])
+        dlat = slat - flat
+        dlon = slon - flon
+        return math.atan2(math.sqrt( (math.cos(flat) * math.sin(dlon))**2 + ( (math.cos(slat) * math.sin(flat)) - (math.sin(slat) * math.cos(flat) * math.cos(dlon))) ** 2 ), (math.sin(slat) * math.sin(flat) + math.cos(slat) * math.cos(flat) * math.cos(dlon))) * 6371.01
+
+    def reverseGeocode(self, name='short_name'):
+        url = 'http://maps.google.com/maps/api/geocode/xml?latlng=%f,%f&sensor=false' % (self.lat, self.lon)
+        tree = parse(urllib2.urlopen(url))
+
+        for component in tree.findall('status'):
+            if component.text == 'OK':
+                break
+            else:
+                return None
+        country = None
+        province = None
+        for acomp in tree.findall('result/address_component'):
+            for t in acomp.findall('type'):
+                if country and province:
+                    return '%s, %s' % (province, country)
+                if not country and t.text == 'country':
+                    country = acomp.find(name).text
+                elif not province and t.text == 'administrative_area_level_1':
+                    province = acomp.find(name).text
+
+class Route:
+    def __init__(self, route):
+        self.num = route[0]
+        self.name = route[1]
+        self.comment = route[1]
+        self.legs = route[2]
+        self.nlegs = len(self.legs)
+        self.note = ''
+        self.rating = 0
+        self.location = ''
+
+    def update(self, hike):
+        # (name, country, province, rating, note)
+        self.name, self.country, self.province, self.rating, self.note = hike
+        self.rating = int(self.rating)
+        self.note = self.note.rstrip('\n')
+
+    def getLocation(self):
+        return self.country + ',' + self.province
+
+class ComponentDialog(tkSimpleDialog.Dialog):
+    def __init__(self, master, waypt, route, trkpt, title='Select Component'):
+        if waypt > 0:
+            self.wayptState = 'normal'
+        else:
+            self.wayptState = 'disabled'
+        if route > 0:
+            self.routeState = 'normal'
+        else:
+            self.routeState = 'disabled'
+        if trkpt > 0:
+            self.trkptState = 'normal'
+        else:
+            self.trkptState = 'disabled'
+        tkSimpleDialog.Dialog.__init__(self, master, title=title)
+
+    def body(self, master):
+        Checkbutton(master, state=self.wayptState, text='Waypoints', variable=self.waypt).grid(row=0, sticky='w')
+        Checkbutton(master, state=self.routeState, text='Routes', variable=self.route).grid(row=1, sticky='w')
+        Checkbutton(master, state=self.trkptState, text='Trackpoints', variable=self.trkpt).grid(row=2, sticky='w')
+        return None
+
+    def apply(self):
+        self.result = self.waypt.get() * 'w' + self.route.get() * 'r' + self.trkpt.get() * 't'
+
+class KeepComponentDialog(ComponentDialog):
+    def __init__(self, master, trkpt=1, waypt=1, route=1):
+        self.waypt = IntVar(value=1)
+        self.route = IntVar(value=1)
+        self.trkpt = IntVar(value=1)
+        ComponentDialog.__init__(self, master, waypt, route, trkpt, title='Keep Components')
+
+    def validate(self):
+        if self.routeState == 'normal' and self.route.get() == 1 and self.wayptState == 'normal' and self.waypt.get() == 0:
+            return askokcancel('Warning', 'Keeping routes will also keep waypoints.\nProceed?')
+        if self.wayptState == 'normal' and self.waypt.get() == 1:
+            return 1
+        elif self.routeState == 'normal' and self.route.get() == 1:
+            return 1
+        elif self.trkptState == 'normal' and self.trkpt.get() == 1:
+            return 1
+        else:
+            showerror('Error', 'Error: No components remaining.')
+            return 0
+        return 1
+
+class DiscardComponentDialog(ComponentDialog):
+    def __init__(self, master, trkpt=1, waypt=1, route=1):
+        self.waypt = IntVar()
+        self.route = IntVar()
+        self.trkpt = IntVar()
+        ComponentDialog.__init__(self, master, waypt, route, trkpt, title='Discard Components')
+
+    def validate(self):
+        if self.wayptState == 'normal' and self.waypt.get() == 1 and self.routeState == 'normal' and self.route.get() == 0:
+            return askokcancel('Warning', 'Discarding waypoints will also discard routes.\nProceed?')
+        if self.wayptState == 'normal' and self.waypt.get() == 0:
+            return 1
+        elif self.routeState == 'normal' and self.route.get() == 0:
+            return 1
+        elif self.trkptState == 'normal' and self.trkpt.get() == 0:
+            return 1
+        else:
+            showerror('Error', 'Error: No components remaining.')
+            return 0
+        return 1
+
+class ComponentFrame(LabelFrame):
+    def __init__(self, master, text, color='#FF0000'):
+        LabelFrame.__init__(self, master, borderwidth=2, relief=GROOVE)
+
+        self.color = StringVar(value=color)
+        self.state = IntVar(value=1)
+
+        label = Frame(self) # container for the LabelFrame label
+        self.colorButton = Button(label, command=self.askColor, height=1, width=1, bg=color, padx=0, pady=0)
+        self.colorButton.pack(side='left')
+        Label(label, text=text).pack(side='left', fill='x', expand=1)
+        self.config(labelwidget=label)
+
+        # main frame widgets: ron/roff radiobutton selects to show or hide component
+        self.ron = Radiobutton(self, text='Show', variable=self.state, value=1, command=self.show)
+        self.roff = Radiobutton(self, text='Hide', variable=self.state, value=0, command=self.hide)
+        self.ron.pack(side='left')
+        self.roff.pack(side='left')
+
+        self.disable() # turn on explicitly
+
+    def enable(self):
+        self.ron['state'] = self.roff['state'] = 'normal'
+        self.show()
+        self.state.set(1)
+        self.config(relief=GROOVE)
+
+    def disable(self):
+        self.state.set(0)
+        self.hide()
+        self.ron['state'] = self.roff['state'] =  'disabled'
+        self.config(relief=SUNKEN)
+
+    # visually indicate the radio control is in the 'show' position
+    def show(self):
+        self.colorButton.config(state=NORMAL, relief=RAISED, bg=self.color.get())
+
+    # visually indicate the radio control is in the 'hide' position
+    def hide(self):
+        self.colorButton.config(state=DISABLED, relief=FLAT, bg='gray')
+
+    # get a hex string color from the user
+    def askColor(self):
+        (triple, hexstr) = askcolor(initialcolor=self.color.get())
+        if hexstr:
+            self.color.set(hexstr)
+            self.setColor()
+
+    # update the frame to reflect the current value of color instance variable
+    def setColor(self):
+        self.colorButton['bg'] = self.color.get()
+
+    def getColor(self):
+        return self.color.get()
+
+# ComponentFrame that only alows a choice of three colors: red, green and blue
+class TriColorComponentFrame(ComponentFrame):
+    def __init__(self, master, text, color='#FF0000'):
+        ComponentFrame.__init__(self, master, text, color=color)
+
+    # override: use a popup menu instead of a colorchooser
+    def askColor(self):
+        colorPopup = Menu(self.colorButton, relief='raised',activeborderwidth=0)
+        for color in ['#FF0000', '#00FF00', '#0000FF']:
+            colorPopup.add('radiobutton', variable=self.color, value=color,
+                           background=color, indicatoron=0,
+                           command=self.setColor)
+        x = self.colorButton.winfo_rootx() + self.colorButton.winfo_width()
+        y = self.colorButton.winfo_rooty()
+        colorPopup.tk_popup(x, y)
+
+# A table of data implemented as a Tix HList. This widget is actually a frame
+# packed with the HList on the left and a scrollbar on the right. Select grid
+# functions have been overridden to reflect onto the frame instead of the actual
+# HList object.
+class ComponentTable(Tix.HList):
+    def __init__(self, parent, headers, rows):
+        self.frame = Frame(parent)
+        scroll = Scrollbar(self.frame, command=self.yview)
+        self.ncols = len(headers) + 1
+        self.nrows = len(rows)
+        Tix.HList.__init__(self, self.frame, columns=self.ncols, header=1, selectmode='extended', padx=5, yscrollcommand=scroll.set)
+        self.bind('<ButtonRelease-3>', self.rClick)
+        self.checkVar = IntVar(value=1)
+        self.check = Checkbutton(self, padx=0, pady=0, command=self.toggleAll, variable=self.checkVar)
+        self.header_create(0, itemtype='window', window=self.check)
+        for i in range(1, self.ncols):
+            self.header_create(i, text=headers[i-1])
+
+        self.rows = {}
+        self.set_data(rows)
+        self.pack(fill='both', expand=1, side='left')
+        scroll.pack(fill='y', side='right')
+        self.state = 'normal'
+
+        self.styles = { 'normal': Tix.DisplayStyle('text', refwindow=self, foreground='black', selectforeground='black', padx=5),
+                        'disabled': Tix.DisplayStyle('text', refwindow=self, foreground='gray', selectforeground='white', padx=5)
+                      }
+
+    def set_data(self, rows):
+        self.delete_all()
+        self.rows.clear()
+        for i, item in enumerate(rows):
+            cbVar = IntVar(value=1)
+            cb = Checkbutton(self, command=self.checkClicked, variable=cbVar, padx=0, pady=0)
+            key = str(item[0])
+            self.add(key)
+            self.item_create(key, 0, itemtype='window', window=cb)
+            for j in range(len(item)):
+                self.item_create(key, j+1, text=item[j])
+            self.rows[key] = (cb, cbVar)
+
+    def grid(self, **kw):
+        self.frame.grid(kw)
+
+    def grid_forget(self):
+        self.frame.grid_forget()
+
+    def grid_remove(self):
+        self.frame.grid_remove()
+
+    def rClick(self, event):
+        popup = Menu(self)
+        popup.add('command', label='Show Selected', command=lambda: self.setSelected(1))
+        popup.add('command', label='Hide Selected', command=lambda: self.setSelected(0))
+        popup.tk_popup(event.x_root, event.y_root)
+
+    def rowconfig(self, entry, **kw):
+        button, variable = self.rows[entry]
+        for k, value in kw.iteritems():
+            if k == 'state':
+                if value not in ['normal', 'disabled']:
+                    raise ValueError(value + ' is not a valid value for ' + k)
+                self.entryconfigure(entry, state=value)
+                button.config(state=value)
+                for i in range(1, self.ncols):
+                    self.item_configure(entry, i, style=self.styles[value])
+            elif k == 'set' and value in [0, 1]:
+                variable.set(value)
+                self.checkClicked()
+            else:
+                raise ValueError(k + ',' + value + ': invalid key/value')
+
+    # Configures all of the selected rows to be on (value=1) or off (value=0)
+    def setSelected(self, value):
+        for key in self.info_selection():
+            self.rowconfig(key, set=value)
+
+    def toggleAll(self):
+        for entry, (button, variable) in self.rows.iteritems():
+            variable.set(self.checkVar.get())
+        self.checkClicked()
+
+    def getKeys(self):
+        keys = []
+        if self.state == 'normal':
+            for key, (button, variable) in self.rows.iteritems():
+                if variable.get():
+                    keys.append(key)
+        return keys
+
+    # When a row's checkbox is clicked, update the HList header checkbox to
+    # reflect if all or none of the row's checkboxes are selected.
+    def checkClicked(self):
+        for key, (button, variable) in self.rows.iteritems():
+            if variable.get():
+                self.checkVar.set(1)
+                return
+        self.checkVar.set(0)
+
+    def enable(self):
+        self.state = 'normal'
+        self.check.config(state='normal')
+        self.bind('<ButtonRelease-3>', self.rClick)
+        for i in range(1, self.ncols):
+            self.header_configure(i, style=self.styles['normal'])
+        for key, (button, variable) in self.rows.iteritems():
+            self.rowconfig(key, state='normal')
+
+    def disable(self):
+        self.state = 'disabled'
+        self.check.config(state='disabled')
+        self.unbind('<ButtonRelease-3>')
+        for i in range(1, self.ncols):
+            self.header_configure(i, style=self.styles['disabled'])
+        for key, (button, variable) in self.rows.iteritems():
+            self.rowconfig(str(key), state='disabled')
+
+class HelpWindow(Toplevel):
+    def __init__(self, root):
+        Toplevel.__init__(self, root)
+        self.exists = True
+        self.root = root
+        self.transient(self.root)
+        self.geometry('+%d+%d' % (self.root.winfo_rootx()+self.root.winfo_width(), self.root.winfo_rooty()))
+        self.protocol('WM_DELETE_WINDOW', self.close)
+        self.bind('<Escape>', self.close)
+        self.title('Query Help - xgps')
+
+        self.st = ScrolledText(self)
+        self.st.pack(fill='both', expand=1)
+        Button(self, text='Cancel', command=self.close).pack(anchor='e')
+
+    def close(self, event=None):
+        self.destroy()
+        self.exists = False
+
+    def insert(self, s):
+        self.st.insert(END, s)
+
+class QueryWindow(Toplevel):
+    def __init__(self, root, cur):
+        Toplevel.__init__(self, root)
+        with open('query.sql', 'r') as file:
+            self.querys = file.read().split(';')
+        self.title('Query Database - xgps')
+        self.root = root
+        self.cur = cur
+        hikePanel = LabelFrame(self, text='Current Hike')
+        hikePanel.columnconfigure(0, weight=1)
+        hikePanel.rowconfigure(0, weight=1)
+        self.hikeList = ComponentTable(hikePanel, ['No.', 'Hike'], [])
+        self.hikeList.checkClicked = self.hikeCheckClicked
+        self.hikeList.frame.grid(row=0, column=0, sticky='nsew')
+        self.help = None
+        self.idle = None
+
+        self.hikeInfoFrame = Frame(hikePanel)
+        self.hikeVars = {}
+        for i, item in enumerate(['Comment', 'No. Legs', 'Location', 'Rating', 'Note']):
+            self.hikeVars[item] = StringVar()
+            Label(self.hikeInfoFrame, text=item+':').grid(row=i, column=0, sticky='ne')
+            Label(self.hikeInfoFrame, textvariable=self.hikeVars[item], anchor='w').grid(row=i, column=1, sticky='new')
+
+        Button(hikePanel, text='Map It', command=self.onMapIt).grid(row=1, column=0, columnspan=2, sticky='ne')
+
+        hikePanel.grid(row=0, column=0, sticky='nsew')
+
+        transFrame = LabelFrame(self, text='Query Database')
+        self.queryDescriptions = [
+            'Find the name of the shortest hike in _____ (location; SQL wild card % is permitted).',
+            'How many hikes have more than _____ (number) legs?',
+            'Find the names of hikes that start within _____ distance of some location.',
+            'Delete all hikes with a rating lower than _____',
+            'Create a custom query using any SQL statement.'
+        ]
+        self.transVars = {
+            'description': StringVar(value=self.queryDescriptions[0]),
+            'radio': IntVar(),
+            '0.location': StringVar(),
+            '1.legs': StringVar(),
+            '2.distance': StringVar(),
+            '2.units': IntVar(),
+            '2.lat': StringVar(),
+            '2.lon': StringVar(),
+            '2.location': StringVar(),
+            '3.rating': StringVar()
+        }
+
+        for i, (row, label) in enumerate([ (0, 'Shortest Hike'), (1, 'Minimum Legs'), (2, 'Hikes within Area'), (5, 'Delete by Rating'), (6, 'Custom')]):
+            r = Radiobutton(transFrame, text=label+':', variable=self.transVars['radio'], value=i, command=self.updateTransactions)
+            r.bind('<Enter>', self.queryMouseOn)
+            r.bind('<Leave>', self.queryMouseOff)
+            r.grid(row=row, column=0, sticky='nw')
+
+        for i, label in enumerate(['Location', 'No. Legs', 'Distance', 'Latitude', 'Location', 'Rating', 'SQL']):
+            Label(transFrame, text='   '+label+':', anchor='e').grid(row=i, column=1, sticky='ne')
+
+        f2_0 = Frame(transFrame)
+        f2_1 = Frame(transFrame)
+        self.transWidgets = [
+            Entry(transFrame, textvariable=self.transVars['0.location'], width=10),
+            Entry(transFrame, textvariable=self.transVars['1.legs'], width=10),
+            Entry(f2_0, textvariable=self.transVars['2.distance'], width=10),
+            Radiobutton(f2_0, text='Kilometers', value=0, variable=self.transVars['2.units']),
+            Radiobutton(f2_0, text='Miles', value=1, variable=self.transVars['2.units']),
+            Entry(f2_1, textvariable=self.transVars['2.lat'], width=10),
+            Entry(f2_1, textvariable=self.transVars['2.lon'], width=10),
+            Entry(transFrame, textvariable=self.transVars['2.location'], width=10, state='disabled'),
+            Scale(transFrame, from_=0, to=5, variable=self.transVars['3.rating'], orient='horizontal'),
+            ScrolledText(transFrame, height=4, width=10)
+        ]
+
+        for i, widget in enumerate(self.transWidgets):
+            if i in [0,1]:
+                widget.value = i
+            elif i in range(2,8):
+                widget.value = 2
+            else:
+                widget.value = i - 5
+
+        self.transWidgets[7].value = -1
+        self.transWidgets[5].bind('<Key>', self.onUpdate)
+        self.transWidgets[6].bind('<Key>', self.onUpdate)
+
+        self.transWidgets[0].grid(row=0, column=2, sticky='ew')
+        self.transWidgets[1].grid(row=1, column=2, sticky='ew')
+        self.transWidgets[2].pack(side='left')
+        self.transWidgets[3].pack(side='left')
+        self.transWidgets[4].pack(side='left')
+        self.transWidgets[5].pack(side='left')
+        Label(f2_1, text="   Longitude:").pack(side='left')
+        self.transWidgets[6].pack(side='left')
+        self.transWidgets[7].grid(row=4, column=2, sticky='ew')
+        self.transWidgets[8].grid(row=5, column=2, sticky='ew')
+        self.transWidgets[9].grid(row=6, column=2, sticky='nsew')
+
+        f2_0.grid(row=2, column=2, sticky='ew')
+        f2_1.grid(row=3, column=2, sticky='ew')
+
+        self.transWidgets[8].enabledColor = self.cget('background')
+        self.transWidgets[8].disabledColor = self.transWidgets[0].cget('disabledbackground')
+        self.transVars['4.sql'] = self.transWidgets[9]
+        self.transVars['4.sql'].enabledColor = self.transWidgets[0].cget('background')
+        self.transVars['4.sql'].disabledColor = self.transWidgets[0].cget('disabledbackground')
+        self.transVars['4.sql'].get = lambda: Text.get(self.transVars['4.sql'], 0.0, END)
+        self.transVars['4.sql'].set = (lambda value: self.transVars['4.sql'].delete(0.0, END)) and (lambda value: self.transVars['4.sql'].insert(0.0, value))
+        self.transVars['4.sql'].set('SELECT ')
+
+        buttonFrame = Frame(transFrame)
+        Button(buttonFrame, text='Help', command=self.onHelp).pack(side='left')
+        Button(buttonFrame, text='Submit', command=self.onSubmit).pack(side='left')
+        buttonFrame.grid(column=0, columnspan=3, sticky='e')
+
+        Label(transFrame, textvariable=self.transVars['description'], anchor='w').grid(column=0, columnspan=3, sticky='w')
+        transFrame.columnconfigure(2, weight=1)
+        transFrame.grid(row=1, column=0, sticky='new')
+
+        self.log = LogFrame(self, text='Results')
+        self.log.grid(row=2, column=0, sticky='nsew')
+
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.rowconfigure(2, weight=1)
+
+        self.updateTransactions()
+        self.updateGui()
+
+    def onUpdate(self, event):
+        try:
+            lat = float(self.transVars['2.lat'].get())
+            lon = float(self.transVars['2.lon'].get())
+        except:
+            return
+        if lat < -90 or lat > 90 or lon < -180 or lon > 180:
+            return
+        if self.idle:
+            self.after_cancel(self.idle)
+        self.idle = self.after_idle(self.updateLocation, lat, lon)
+
+    def updateLocation(self, lat, lon):
+        # waypt = (id, lat, lon, symbol, textChoice, textPlace, comment)
+        wp = ('', lat, lon, '', '', '', '')
+        self.transVars['2.location'].set(Waypoint(wp).reverseGeocode('long_name'))
+
+    def queryMouseOn(self, event):
+        value = event.widget.cget('value')
+        self.transVars['description'].set(self.queryDescriptions[value])
+
+    def queryMouseOff(self, event):
+        self.transVars['description'].set(self.queryDescriptions[self.transVars['radio'].get()])
+
+    def onMapIt(self):
+        root = Element('gmapdata')
+        usedColors = [None]
+        for key in self.hikeList.getKeys():
+            self.cur.execute('SELECT comment FROM HIKE WHERE (hikeno = %s)' % key)
+            comment = self.cur.fetchone()[0]
+            color = None
+            while color in usedColors:
+                color = random.randrange(0,0xFFFFFF)
+            usedColors.append(color)
+            route = SubElement(root, 'route', dict(color='#%0.6X'%color, comment=comment, num=key))
+            self.cur.execute('SELECT fileno, ptno FROM HIKEPTS WHERE (hikeno = %s)' % key)
+            for row in self.cur.fetchall():
+                self.cur.execute('SELECT id, comment, lat, lon from WAYPTS WHERE (fileno = %s AND ptno = %s)' % row)
+                for id, comment, lat, lon in self.cur.fetchall():
+                    attr = dict(id=id, lat=str(lat), lon=str(lon), text=comment, symbol='Symbol', color='#FF0000')
+                    SubElement(root, 'waypt', attr)
+                    SubElement(route, 'leg', dict(lat=str(lat), lon=str(lon)))
+        ElementTree(root).write('public_html/gmapdata.xml')
+        serve('public_html/index.html')
+
+    def onSubmit(self):
+        queryn = self.transVars['radio'].get()
+        queryVars = [ self.transVars['0.location'].get(),
+                      self.transVars['1.legs'].get(),
+                      (),
+                      (),
+                      self.transVars['4.sql'].get() ][queryn]
+        if queryn == 2:
+            dist = self.transVars['2.distance'].get()
+            lat = self.transVars['2.lat'].get()
+            lon = self.transVars['2.lon'].get()
+            if not dist:
+                showerror(message='Please enter a distance.')
+                return
+            elif not lat or not lon:
+                showerror(message='Please enter a location.')
+                return
+
+            dist = float(dist)
+            if self.transVars['2.units'].get() == 1:
+                dist = float(dist) * 1.609344
+
+            lat = float(lat)
+            lon = float(lon)
+            if lat < -90 or lat > 90 or lon < -180 or lon > 180:
+                showerror(message=\
+"""Invalid location.
+Latitude must be within the range of -90 to 90 degrees and
+longitude must be within the range of -180 to 180 degrees.""")
+                return
+            queryVars = { 'slat': math.radians(lat), 'slon': math.radians(lon), 'dist': dist }
+
+        try:
+            self.cur.execute(self.querys[queryn] % queryVars)
+            rv = self.cur.fetchall()
+        except Exception, (errno, errmsg):
+            tolog = str(errno) + ': ' + errmsg
+        else:
+            tolog = self.prettyTable(rv)
+
+        if not self.log.fresh:
+            self.log.writeLog(''.ljust(len(tolog.splitlines()[0]), '-'))
+        self.log.writeLog(tolog)
+
+    def onHelp(self):
+        if self.help and self.help.exists:
+            self.help.lift()
+        else:
+            self.help = HelpWindow(self)
+            self.cur.execute('DESCRIBE WAYPTS')
+            self.help.insert('WAYPTS Table\n' + self.prettyTable(self.cur.fetchall()))
+            self.cur.execute('DESCRIBE HIKE')
+            self.help.insert('\nHIKE Table\n' + self.prettyTable(self.cur.fetchall()))
+            self.cur.execute('DESCRIBE HIKEPTS')
+            self.help.insert('\nHIKEPTS Table\n' + self.prettyTable(self.cur.fetchall()))
+
+    def updateTransactions(self):
+        sel = self.transVars['radio'].get()
+        for widget in self.transWidgets:
+            if widget.value == sel:
+                widget.config(state='normal')
+                if widget.value in [3, 4]:
+                    widget.config(background=widget.enabledColor, foreground='black')
+            else:
+                widget.config(state='disabled')
+                if widget.value in [3, 4]:
+                    widget.config(background=widget.disabledColor, foreground='gray')
+
+    def updateGui(self):
+        self.cur.execute('SELECT hikeno, name from HIKE ORDER BY name')
+        self.hikeList.set_data(self.cur.fetchall())
+        self.hikeCheckClicked()
+
+    def hikeCheckClicked(self):
+        ComponentTable.checkClicked(self.hikeList)
+        keys = self.hikeList.getKeys() # check if only one hike selected
+        if len(keys) == 1:
+            self.cur.execute('SELECT comment, location, rating, note FROM HIKE WHERE (hikeno=%s)' % keys[0])
+            rv = self.cur.fetchone()
+            for i, key in enumerate(['Comment', 'Location', 'Rating', 'Note']):
+                self.hikeVars[key].set(rv[i])
+            self.cur.execute('SELECT COUNT(hikeno) FROM HIKEPTS WHERE (hikeno=%s)' % keys[0])
+            self.hikeVars['No. Legs'].set(self.cur.fetchone()[0])
+            self.hikeInfoFrame.grid(row=0, column=1, sticky='n')
+        else:
+            self.hikeInfoFrame.grid_forget()
+
+    def destroy(self):
+        self.root.query = None
+        self.cur.close()
+        Toplevel.destroy(self)
+
+    def prettyTable(self, table):
+        result = ''
+        header = '|'
+        separator = '+'
+        colsize = []
+        for i, head in enumerate(self.cur.description):
+            s = '%-*s' % (head[2], head[0])
+            colsize.append(len(s))
+            header += ' ' + s + ' |'
+            separator += '+'.rjust(colsize[i]+3, '-')
+        result += separator + '\n'
+        result += header + '\n'
+        result += separator + '\n'
+        for row in table:
+            s = '|'
+            for i, col in enumerate(row):
+                s += ' %-*s |' % (colsize[i], str(col))
+            result += s + '\n'
+        result += separator
+
+        return result
+
+class StoreHikeWindow(Toplevel):
+    def __init__(self, root):
+        Toplevel.__init__(self, root)
+        self.transient(root)
+        self.grab_set()
+        self.protocol('WM_DELETE_WINDOW', self.close)
+        self.bind('<Escape>', self.close)
+
+        self.root = root
+        self.hikes = []
+        self.curroute = 0
+        self.variables = {}
+        formFrame = Frame(self, padx=5, pady=5)
+        widgets = [ ('Route', Label(formFrame, anchor='w')),
+                    ('Name', Entry(formFrame)),
+                    ('Comment', Entry(formFrame, state='disabled')),
+                    ('No. Legs', Entry(formFrame, state='disabled')),
+                    ('Location', Entry(formFrame, state='disabled')),
+                    ('Rating', Tix.ComboBox(formFrame)),
+                    ('Note', ScrolledText(formFrame)) ]
+        widgets[5][1].label.config(bd=0, padx=0, pady=0, width=0)
+        for i in range(6):
+            widgets[5][1].append_history(i)
+
+        for i, (label, widget) in enumerate(widgets):
+            Label(formFrame, text=label+':').grid(row=i, column=0, sticky='ne')
+            widget.grid(row=i, column=1, sticky='ew')
+            var = StringVar()
+            if 'variable' in widget.config():
+                self.variables[label] = var
+                widget.config(variable=var)
+            elif 'textvariable' in widget.config():
+                self.variables[label] = var
+                widget.config(textvariable=var)
+            else:
+                self.variables[label] = widget
+
+        # Note is a textfield, it will act as it's own variable
+        self.variables['Note'].get = lambda: ScrolledText.get(self.variables['Note'], 0.0, END)
+
+        formFrame.columnconfigure(1, weight=1)
+
+        buttonFrame = Frame(self, bd=2, relief='groove', padx=10, pady=10)
+        Button(buttonFrame, text='Omit Hike', command=self.nextHike).pack(side='right')
+        Button(buttonFrame, text='Store Hike', command=self.includeHike).pack(side='right')
+        Button(buttonFrame, text='Cancel', command=self.close).pack(side='right')
+
+        formFrame.pack(fill='x', expand=1, anchor='n')
+        buttonFrame.pack(fill='x', expand=1, anchor='s')
+        self.updateGui()
+
+    def updateGui(self):
+        route = self.root.routes[self.curroute]
+        title = str(self.curroute+1) + ' of ' + str(len(self.root.routes))
+        self.variables['Route'].set(title)
+        self.title('Storing Hike %s - xgps' % title)
+        self.variables['Name'].set(route.name)
+        self.variables['Comment'].set(route.comment)
+        self.variables['No. Legs'].set(str(route.nlegs))
+        self.variables['Location'].set(route.location)
+        self.variables['Rating'].set(str(route.rating))
+        self.variables['Note'].delete(0.0, END)
+        self.variables['Note'].insert(0.0, route.note)
+
+    def nextHike(self):
+        self.curroute += 1
+        if self.curroute >= len(self.root.routes):
+            self.destroy()
+            self.root.storeHikes(self.hikes)
+        else:
+            self.updateGui()
+
+    def includeHike(self):
+        self.hikes.append((self.curroute, tuple([self.variables[var].get() for var in ['Name', 'Location', 'Comment', 'Rating', 'Note']])))
+        self.nextHike()
+
+    def close(self, event=None):
+        self.destroy()
+
+class LogFrame(LabelFrame):
+    def __init__(self, root, text='Log'):
+        LabelFrame.__init__(self, root, text=text)
+        self.fresh = True
+        self.log = ScrolledText(self, state='disabled', height=8)
+        self.log.pack(fill='both', expand=1)
+        Button(self, text='Clear', command=self.onClearLog, width=10).pack(anchor='e')
+
+    def writeLog(self, msg):
+        self.fresh = False
+        self.log.config(state='normal')
+
+        if self.log.index('end - 1c') != '1.0':
+            self.log.insert(END, '\n')
+        self.log.insert(END, msg)
+        self.log.config(state='disabled')
+        self.log.see('end')
+
+    def onClearLog(self):
+        self.fresh = True
+        self.log.config(state='normal')
+        self.log.delete(0.0, END)
+        self.log.config(state='disabled')
+
+class xgps(Tix.Tk):
+    def __init__(self, db):
+        Tix.Tk.__init__(self)
+        self.protocol('WM_DELETE_WINDOW', self.close)
+        self.title('xgps')
+
+        self.openFilename = StringVar()
+        self.tempFilename = None
+        self.waypts = []
+        self.routes = []
+        self.trkpts = []
+        self.tracks = []
+        self.db = db
+        self.cur = db.cursor()
+        self.query = None
+        self.fileInfoVar = StringVar()
+
+        self.makeMenu()
+
+        self.infoFrame = LabelFrame(self, labelwidget=Label(self, textvariable=self.openFilename), bd=2, relief='groove')
+        Label(self.infoFrame, textvariable=self.fileInfoVar, justify='left', anchor='w').pack(fill='both', expand=1, anchor='w')
+
+        componentFrame = Frame(self)
+        self.wayptCP = TriColorComponentFrame(componentFrame, text='Waypoints', color='#FF0000')
+        self.trkptCP = TriColorComponentFrame(componentFrame, text='Trackpoints', color='#00FF00')
+        self.routeCP = ComponentFrame(componentFrame, text='Routes', color='#0000FF')
+        self.trackCP = ComponentFrame(componentFrame, text='Tracks', color='#A020F0')
+
+        self.wayptCP.pack(side='left')
+        self.trkptCP.pack(side='left')
+        self.routeCP.pack(side='left')
+        self.trackCP.pack(side='left')
+        self.routeCP.ron.bind('<ButtonRelease-1>', lambda event: self.routeList.enable())
+        self.routeCP.roff.bind('<ButtonRelease-1>', lambda event: self.routeList.disable())
+        self.trackCP.ron.bind('<ButtonRelease-1>',  lambda event: self.trackList.enable())
+        self.trackCP.roff.bind('<ButtonRelease-1>', lambda event: self.trackList.disable())
+
+        self.routeList = ComponentTable(self, ['No.', 'Comment'], [])
+        self.routeList.disable()
+        self.trackList = ComponentTable(self, ['No.', 'Date', 'Time'], [])
+        self.trackList.disable()
+        self.updateMapButton = Button(self, text='Update Map', command=self.onUpdateMap, width=10)
+        self.updateMapButton.config(state='disabled')
+        self.log = LogFrame(self)
+
+        self.infoFrame.grid(row=0, sticky='ew')
+        componentFrame.grid(row=1, sticky='new')
+        self.updateMapButton.grid(row=4, sticky='e')
+        self.routeList.grid(row=2, sticky='nsew')
+        self.trackList.grid(row=3, sticky='nsew')
+        self.log.grid(row=5, sticky='sew')
+
+        self.columnconfigure(0, weight=1)
+
+        self.rowconfigure(2, weight=1)
+        self.rowconfigure(3, weight=1)
+
+    def menuItemOptions(self, opts):
+        if len(opts) == 4:
+            d = opts[3]
+        else:
+            d = {}
+        d['label'] = opts[0]
+        d['underline'] = opts[1]
+        d['command'] = opts[2]
+        return d
+
+    def idle_tasks(self):
+        for i, route in enumerate(self.routes):
+            if not route.location:
+                route.location = self.waypts[self.routes[i].legs[0]].reverseGeocode()
+
+    # Create the menu bar.
+    def makeMenu(self):
+        menuItems = [
+            ('File', 0, [('Open...', 0, self.onOpen),
+                         ('Save', 0, self.onSave),
+                         ('Save As...', 5, self.onSaveAs),
+                         'separator',
+                         ('Merge', 0, self.onMerge),
+                         'separator',
+                         ('Quit', 0, self.close)]
+            ),
+            ('Edit', 0, [('Discard...', 0, self.onDiscard, {'state': 'disabled'}),
+                         ('Keep...', 0, self.onKeep, {'state': 'disabled'}),
+                         ('Sort', 0, self.onSort, {'state': 'disabled'})]
+            ),
+            ('Hikes', 0, [('Store...', 0, self.onStore, {'state': 'disabled'}),
+                          ('Query...', 0, self.onQuery)]
+            )]
+        self.menuitems = {} # 'File': self.menu.Menu(
+        self.option_add('*tearOff', FALSE) # no tearoff
+        self.menu = Menu(self)
+
+        # loop through each menu
+        for (name, underline, items) in menuItems:
+            cascade = Menu(self.menu)
+            # loop through each item in the menu
+            for item in items:
+                if item == 'separator': # add a seperator
+                    cascade.add('separator')
+                else:
+                    cascade.add('command', self.menuItemOptions(item))
+            self.menu.add('cascade', label=name, underline=underline, menu=cascade)
+            self.menuitems[name] = (cascade, len(items))
+        self.config(menu=self.menu)
+
+    def onStore(self):
+        self.wait_window(StoreHikeWindow(self))
+
+    def storeHikes(self, hikes):
+        self.cur.execute('SELECT MAX(fileno) from WAYPTS')
+        fileno = self.cur.fetchone()[0]
+        if fileno == None:
+            fileno = 0
+        else:
+            fileno += 1
+
+        inserted = []
+
+        for i, hike in hikes:
+            route = self.routes[i]
+            route.update(hike)
+
+            self.cur.execute('INSERT INTO HIKE (name, location, comment, rating, note) VALUES ("%s", "%s", "%s", %d, "%s")' % (route.name, route.location, route.comment, route.rating, route.note))
+            self.cur.execute('SELECT MAX(hikeno) from HIKE')
+            hikeno = self.cur.fetchone()[0]
+            for j, leg in enumerate(route.legs):
+                if leg not in inserted:
+                    waypt = self.waypts[leg]
+                    self.cur.execute('INSERT INTO WAYPTS (fileno, ptno, id, comment, lat, lon) VALUES (%d, %d, "%s", "%s", %f, %f)' % (fileno, leg, waypt.ID, waypt.comment, waypt.lat, waypt.lon))
+                    inserted.append(leg)
+
+                if j == 0:
+                    dist = 0.0
+                else:
+                    dist = self.waypts[leg].greatCircleDistance(self.waypts[route.legs[j-1]].getCoord())
+                self.cur.execute('INSERT INTO HIKEPTS (hikeno, fileno, ptno, leg, distance) VALUES (%s, %s, %s, %s, %s)' % (hikeno, fileno, leg, j, dist))
+        if self.query:
+            self.query.updateGui()
+
+    def onQuery(self):
+        if self.query:
+            self.query.deiconify()
+        else:
+            self.query = QueryWindow(self, self.db.cursor())
+
+    def onSaveAs(self):
+        filename = asksaveasfilename()
+        if filename and os.path.basename(filename) in ['.temp.gps', '.error.log']:
+            self.log.writeLog('Error, can\'t open ' + filename)
+        elif filename:
+            if self.tempFilename:
+                fin = open(self.tempFilename, 'r')
+            else:
+                fin = open(self.openFilename.get(), 'r')
+            fout = open(filename, 'w')
+            fout.write(fin.read())
+            fout.close()
+            fin.close()
+            self.setFileName(filename)
+            self.tempFilename = ''
+
+    def onSave(self):
+        if self.tempFilename:
+            fin = open(self.tempFilename, 'r')
+            if self.openFilename.get():
+                fout = open(self.openFilename.get(), 'w')
+            else:
+                filename = asksaveasfilename()
+                if filename and os.path.basename(filename) in ['.temp.gps', '.error.log']:
+                    self.log.writeLog('Error, can\'t open ' + filename)
+                    return
+                elif filename:
+                    fout = open(filename, 'w')
+                    self.setFileName(filename)
+                    self.tempFilename = filename
+                else:
+                    return
+
+            fout.write(fin.read())
+            fin.close()
+            fout.close()
+
+    def onOpen(self, load=''):
+        filename = load or askopenfilename()
+        if filename and os.path.basename(filename) in ['.temp.gps', '.error.log']:
+            self.log.writeLog('Error, can\'t open ' + filename)
+        elif filename:
+            if self.updateGui(filename):
+                self.setFileName(filename)
+
+    def onMerge(self, load=''):
+        fileb = load or askopenfilename()
+        if fileb:
+            self.runGpstool('-merge ' + fileb)
+
+    def close(self, event=None):
+        if askyesno('Exit', 'Are you sure you would like to exit?'):
+            self.destroy()
+
+    def onKeep(self):
+        d = KeepComponentDialog(self, waypt=len(self.waypts), route=len(self.routes), trkpt=len(self.trkpts))
+        if d.result:
+            self.runGpstool('-keep ' + d.result)
+
+    def onDiscard(self):
+        d = DiscardComponentDialog(self, waypt=len(self.waypts), route=len(self.routes), trkpt=len(self.trkpts))
+        if d.result:
+            self.runGpstool('-discard ' + d.result)
+
+    def onSort(self):
+        self.runGpstool('-sortwp ')
+
+    def onUpdateMap(self):
+        root = Element('gmapdata')
+        if self.wayptCP.state.get():
+            for waypt in self.waypts:
+                attr = dict(id=waypt.ID, lat=str(waypt.lat), lon=str(waypt.lon), text=waypt.getText(), symbol=waypt.symbol, color=self.wayptCP.getColor())
+                SubElement(root, 'waypt', attr)
+        if self.routeCP.state.get():
+            keys = self.routeList.getKeys()
+            for route in self.routes:
+                if str(route.num) not in keys:
+                    continue
+                attr = dict(color=self.routeCP.getColor(), num=str(route.num), comment=route.comment)
+                subelem = SubElement(root, 'route', attr)
+                for leg in route.legs:
+                    lat, lon = self.waypts[leg].getCoord()
+                    SubElement(subelem, 'leg', dict(lat=str(lat), lon=str(lon)))
+        if self.trkptCP.state.get():
+            for trkpt in self.trkpts:
+                attr = dict(lat=str(trkpt[0]), lon=str(trkpt[1]), color=self.trkptCP.getColor())
+                SubElement(root, 'trkpt', attr)
+        if self.trackCP.state.get():
+            keys = self.trackList.getKeys()
+            for i, track in enumerate(self.tracks):
+                if str(track[0]) not in keys:
+                    continue
+                duration = str(track[2] / 3600 % 60) +  ':' + str(track[2] / 60 % 60) + ':' + str(track[2] % 60)
+                dist = str(track[3]) + self.unitHorz
+                speed = str(track[4]) + self.unitSpeed
+                attr = dict(color=self.trackCP.getColor(), seqno=str(track[0]), start=track[1], duration=duration, dist=dist, speed=speed)
+                subelem = SubElement(root, 'track', attr)
+                start = track[0] - 1
+                if i < len(self.tracks) - 1:
+                    end = self.tracks[i+1][0] - 1
+                else:
+                    end = len(self.trkpts)
+                for j, trkpt in enumerate(self.trkpts[start:end]):
+                    attr = dict(lat=str(trkpt[0]), lon=str(trkpt[1]))
+                    SubElement(subelem, 'trkptleg', attr)
+        ElementTree(root).write('public_html/gmapdata.xml')
+        serve('public_html/index.html')
+
+    def setFileName(self, filename):
+        self.tempFilename = ''
+        self.openFilename.set(filename)
+        self.title(os.path.basename(filename) + ' - xgps')
+
+    def updateGui(self, filename):
+        rv = Gps.readFile(str(filename))
+        if rv == 'OK':
+            del self.waypts[:]
+            del self.routes[:]
+            del self.trkpts[:]
+            del self.tracks[:]
+            units = Gps.getData(self.waypts, self.routes, self.trkpts, self.tracks)
+            Gps.freeFile()
+            self.unitHorz = {'K': 'km', 'N': 'nm', 'S': 'miles', 'M': 'm', 'F': 'ft'}[units[0]]
+            self.unitSpeed = self.unitHorz + '/' + units[1].lower()
+        else:
+            showerror(message=rv)
+            self.log.writeLog(rv)
+            return 0
+
+        self.updateMapButton.config(state='normal')
+        for i in range(self.menuitems['Edit'][1]):
+            self.menuitems['Edit'][0].entryconfig(i, state='normal')
+        self.menuitems['Hikes'][0].entryconfig('Store...', state='normal')
+
+        if len(self.waypts) == 0:
+            self.wayptCP.disable()
+        else:
+            self.wayptCP.enable()
+            # convert tuples into Waypoint objects
+            for i, waypt in enumerate(self.waypts):
+                self.waypts[i] = Waypoint(waypt)
+
+        rows = [[route[0], route[1]] for route in self.routes]
+        self.routeList.set_data(rows)
+        if len(self.routes) == 0:
+            self.routeCP.disable()
+            self.routeList.disable()
+        else:
+            self.routeCP.enable()
+            self.routeList.enable()
+            # convert tuples into Route objects
+            for i, route in enumerate(self.routes):
+                self.routes[i] = Route(route)
+            self.after_idle(self.idle_tasks)
+
+        if len(self.trkpts) == 0:
+            self.trkptCP.disable()
+        else:
+            self.trkptCP.enable()
+
+        rows = [[num, date, time] for num, (date, sep, time) in [[n, start.partition(' ')] for n, start in [track[0:2] for track in self.tracks]]]
+        self.trackList.set_data(rows)
+        if len(self.tracks) == 0:
+            self.trackCP.disable()
+            self.trackList.disable()
+        else:
+            self.trackCP.enable()
+            self.trackList.enable()
+
+        info_in, info_out, info_err = os.popen3('./gpstool -info < \'' + filename + '\'', 'r')
+        error = info_err.read()
+        if error:
+            self.log.writeLog(error)
+            return 0
+        else:
+            self.fileInfoVar.set(info_out.read().rstrip())
+
+        return 1
+
+    def runGpstool(self, command):
+        if self.tempFilename:
+            infile = self.tempFilename
+        elif self.openFilename.get():
+            infile = self.openFilename.get()
+            self.tempFilename = infile + '~'
+        else:
+            self.log.writeLog('Need an input file.')
+            return
+
+        log = os.fdopen(os.open('.error.log', os.O_RDONLY | os.O_NONBLOCK))
+        temp = os.fdopen(os.open('.temp.gps', os.O_RDONLY | os.O_NONBLOCK))
+
+        os.system('./gpstool ' + command + ' < \'' + infile  + '\' > ' + '.temp.gps'  + ' 2> .error.log')
+
+        error = log.read()
+        if error:
+            showerror(message=error)
+            self.log.writeLog(error)
+        else:
+            with open(self.tempFilename, 'w') as out:
+                out.write(temp.read())
+            self.updateGui(self.tempFilename)
+
+        log.close()
+        temp.close()
+
+def makefifo(name):
+    try:
+        os.unlink(name)
+    except OSError, inst:
+        if inst.errno == errno.EISDIR:
+            raise
+    try:
+        os.mkfifo(name)
+    except OSError, inst:
+        if inst.errno == errno.EACCES:
+            raise
+
+def main():
+    if len(sys.argv) == 3:
+        host = 'db.cis.uoguelph.ca'
+    elif len(sys.argv) == 4:
+        host = sys.argv[3]
+    else:
+        print 'Usage: ' + sys.argv[0] + ' username password [hostname]'
+        sys.exit(1)
+
+    try:
+        db = MySQLdb.connect(host=host, db=sys.argv[1], user=sys.argv[1], passwd=sys.argv[2])
+        startWebServer(43365)
+        os.mkdir('public_html')
+    except MySQLdb.Error, (num, desc):
+        print 'Unable to connect to ' + host + ': ' + desc
+        sys.exit(1)
+    except Exception, inst:
+        pass
+#    warnings.simplefilter('ignore')
+    makefifo('.error.log')
+    makefifo('.temp.gps')
+    cur = db.cursor()
+    with open('tables.sql', 'r') as table:
+        init = ''
+        for line in table:
+            init += line
+            if line.rstrip() == ')':
+                cur.execute(init)
+                init = ''
+    cur.close()
+    gui = xgps(db)
+    gui.mainloop()
+
+    # remove temp files
+    try:
+        os.unlink('.error.log')
+    except:
+        pass
+    try:
+        os.unlink('.temp.gps')
+    except:
+        pass
+    killServers()
+    db.close()
+
+if __name__ == '__main__':
+    main()
+
