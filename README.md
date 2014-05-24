@@ -3,12 +3,12 @@ xgps
 
 This is a University 4 month solo project I did back in 2010. It dealt with flat .gps files that stored waypoints, routes and recorded track information (I forget the specification name).
 
-** gputil
+## gputil
 
 A library for dealing with reading, writing and parsing the flat file format.
 
 
-** gpstool
+## gpstool
 
 A command line utility, utilizing gputil, that allowed manipulation of data stored in the .gps files, including:
 
@@ -17,9 +17,9 @@ A command line utility, utilizing gputil, that allowed manipulation of data stor
 * Sorting waypoints
 * Merging .gps files
 
-And it supported bash piping to itself!
+And it supported piping to itself!
 
-** xgps
+## xgps
 
 A TkInter GUI over gputil + gpstool
 
